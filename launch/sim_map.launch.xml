@@ -1,0 +1,24 @@
+<launch>
+    <!-- Launches the racecar simulator with the stata_basement map for localization testing -->
+
+    <!-- Map server with stata_basement -->
+    <arg name="map" default="$(find-pkg-share localization)/maps/stata_basement.yaml"/>
+    <node name="map_server" pkg="nav2_map_server" exec="map_server" output="screen">
+        <param name="yaml_filename" value="$(var map)"/>
+    </node>
+
+    <node name="lifecycle_manager" exec="lifecycle_manager" pkg="nav2_lifecycle_manager" output="screen">
+        <param name="autostart" value="True"/>
+        <param name="node_names" value="['map_server']"/>
+    </node>
+
+    <!-- Racecar URDF model -->
+    <group>
+        <include file="$(find-pkg-share racecar_simulator)/launch/racecar_model.launch.xml"/>
+    </group>
+
+    <!-- Racecar simulator -->
+    <node pkg="racecar_simulator" name="racecar_simulator" exec="simulate" output="screen">
+        <param from="$(find-pkg-share racecar_simulator)/params.yaml"/>
+    </node>
+</launch>

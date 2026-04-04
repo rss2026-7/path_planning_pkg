@@ -6,6 +6,7 @@ from localization.motion_model import MotionModel
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped, PoseArray, Pose
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Float64MultiArray
 from tf2_ros import TransformBroadcaster
 
 from rclpy.node import Node
@@ -65,6 +66,7 @@ class ParticleFilter(Node):
 
         self.odom_pub = self.create_publisher(Odometry, "/pf/pose/odom", 1)
         self.particle_pub = self.create_publisher(PoseArray, "/pf/particles", 1)
+        self.spread_pub = self.create_publisher(Float64MultiArray, "/pf/spread", 1)
 
         # TF broadcaster to publish the map -> particle_filter_frame transform
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -82,6 +84,11 @@ class ParticleFilter(Node):
         # Don't run the filter until the user sets an initial pose
         self.initialized = False
 
+        # Periodic stats logger (every 2 seconds)
+        self.publish_count = 0
+        self.last_stats_time = self.get_clock().now()
+        self.create_timer(2.0, self.log_stats)
+
         self.get_logger().info("=============+READY+=============")
 
     def pose_callback(self, pose_msg):
@@ -96,10 +103,11 @@ class ParticleFilter(Node):
         q = pose_msg.pose.pose.orientation
         theta = 2.0 * np.arctan2(q.z, q.w)
 
-        # Spread particles around the initial guess with small noise
-        self.particles[:, 0] = x 
-        self.particles[:, 1] = y 
-        self.particles[:, 2] = theta 
+        # Spread particles around the initial guess with small Gaussian noise
+        self.particles[:, 0] = x + np.random.normal(0, 0.5, self.num_particles)
+        self.particles[:, 1] = y + np.random.normal(0, 0.5, self.num_particles)
+        self.particles[:, 2] = theta + np.random.normal(0, 0.2, self.num_particles)
+        self.last_odom_time = None  # Reset so first odom after re-init is clean
         self.initialized = True
         self.get_logger().info(f"Particles initialized at ({x:.2f}, {y:.2f}, {theta:.2f})")
 
@@ -139,6 +147,7 @@ class ParticleFilter(Node):
         """
         if not self.initialized:
             return
+
         if not self.sensor_model.map_set:
             return
 
@@ -165,7 +174,9 @@ class ParticleFilter(Node):
         self.particles = self.particles[sampled_indices]
 
         # Add a tiny bit of noise after resampling to keep the set diverse
-      
+        self.particles[:, 0] += np.random.normal(0, 0.05, self.num_particles)
+        self.particles[:, 1] += np.random.normal(0, 0.05, self.num_particles)
+        self.particles[:, 2] += np.random.normal(0, 0.02, self.num_particles)
 
         self.publish_pose_estimate()
 
@@ -190,6 +201,7 @@ class ParticleFilter(Node):
         Publish the current best pose estimate as an Odometry message and
         broadcast the corresponding map -> particle_filter_frame TF transform.
         """
+
         x, y, theta = self.get_average_pose()
         now = self.get_clock().now().to_msg()
 
@@ -204,18 +216,33 @@ class ParticleFilter(Node):
         odom_msg.pose.pose.orientation.w = np.cos(theta / 2.0)
         self.odom_pub.publish(odom_msg)
 
-        # Publish the full particle cloud as a PoseArray
+        # Publish the full particle cloud as a PoseArray (vectorized trig)
         pose_array = PoseArray()
         pose_array.header.stamp = now
         pose_array.header.frame_id = "map"
-        for p in self.particles:
+        half_thetas = self.particles[:, 2] / 2.0
+        sin_half = np.sin(half_thetas)
+        cos_half = np.cos(half_thetas)
+        poses = []
+        for i in range(self.num_particles):
             pose = Pose()
-            pose.position.x = p[0]
-            pose.position.y = p[1]
-            pose.orientation.z = np.sin(p[2] / 2.0)
-            pose.orientation.w = np.cos(p[2] / 2.0)
-            pose_array.poses.append(pose)
+            pose.position.x = self.particles[i, 0]
+            pose.position.y = self.particles[i, 1]
+            pose.orientation.z = float(sin_half[i])
+            pose.orientation.w = float(cos_half[i])
+            poses.append(pose)
+        pose_array.poses = poses
         self.particle_pub.publish(pose_array)
+
+        # Publish particle spread [std_x, std_y, std_theta]
+        spread_msg = Float64MultiArray()
+        spread_msg.data = [
+            float(np.std(self.particles[:, 0])),
+            float(np.std(self.particles[:, 1])),
+            float(np.std(self.particles[:, 2])),
+        ]
+        self.spread_pub.publish(spread_msg)
+        self.publish_count += 1
 
         # Broadcast TF transform so RViz can visualize the car on the map
         tf_msg = TransformStamped()
@@ -228,6 +255,27 @@ class ParticleFilter(Node):
         tf_msg.transform.rotation.z = np.sin(theta / 2.0)
         tf_msg.transform.rotation.w = np.cos(theta / 2.0)
         self.tf_broadcaster.sendTransform(tf_msg)
+
+
+    def log_stats(self):
+        """Log particle filter stats every 2 seconds."""
+        if not self.initialized:
+            return
+
+        now = self.get_clock().now()
+        dt = (now - self.last_stats_time).nanoseconds / 1e9
+        hz = self.publish_count / dt if dt > 0 else 0.0
+        self.publish_count = 0
+        self.last_stats_time = now
+
+        x, y, theta = self.get_average_pose()
+        std_x = np.std(self.particles[:, 0])
+        std_y = np.std(self.particles[:, 1])
+
+        self.get_logger().info(
+            f"[PF] {hz:.1f} Hz | pose=({x:.2f}, {y:.2f}, {np.degrees(theta):.1f}deg) | "
+            f"spread=({std_x:.3f}, {std_y:.3f})m"
+        )
 
 
 def main(args=None):

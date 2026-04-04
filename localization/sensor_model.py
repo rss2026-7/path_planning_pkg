@@ -7,14 +7,12 @@ from scipy.spatial.transform import Rotation as R
 
 from nav_msgs.msg import OccupancyGrid
 
-import sys
-
-np.set_printoptions(threshold=sys.maxsize)
 
 
 class SensorModel:
 
     def __init__(self, node):
+        self.node = node
         node.declare_parameter('map_topic', "default")
         node.declare_parameter('num_beams_per_particle', 1)
         node.declare_parameter('scan_theta_discretization', 1.0)
@@ -142,21 +140,28 @@ class SensorModel:
         # Ray trace from each particle to get what it would see on the map.
         scans = self.scan_sim.scan(particles)
 
+        # Handle NaN/inf in LIDAR observations before conversion.
+        z_max = self.table_width - 1
+        observation = np.nan_to_num(observation, nan=0.0, posinf=z_max, neginf=0.0)
+
         # Convert from meters to pixel units so we can index into the table.
         scale = self.resolution * self.lidar_scale_to_map_scale
         obs = observation / scale
         scans = scans / scale
 
         # Clip to table bounds and discretize to ints for indexing.
-        z_max = self.table_width - 1
         obs = np.clip(obs, 0, z_max).astype(int)
         scans = np.clip(scans, 0, z_max).astype(int)
 
         # Look up p(measured z | true d) for every particle and beam at once.
         probs = self.sensor_model_table[obs, scans]
 
-        # Each particle's weight is the product of all its beam probabilities.
-        weights = np.prod(probs, axis=1)
+        # Use log-space to avoid underflow from multiplying many small probabilities.
+        # Squash probabilities (raise to power < 1) to soften the distribution.
+        squash_factor = 1.0 / 3.0
+        log_weights = np.sum(np.log(probs + 1e-300) * squash_factor, axis=1)
+        log_weights -= np.max(log_weights)  # shift for numerical stability
+        weights = np.exp(log_weights)
         return weights
 
     def map_callback(self, map_msg):
@@ -185,4 +190,4 @@ class SensorModel:
             0.5)
 
         self.map_set = True
-        print("Map initialized")
+        self.node.get_logger().info("Map initialized")
