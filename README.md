@@ -1,20 +1,11 @@
-# path_planning_pkg — RSS Team 7
-
-> **Team 7's implementation** of [MIT RSS Lab 6: Path Planning](https://github.com/mit-rss/path_planning).
-> Original skeleton code provided by MIT RSS course staff.
-
-## Deadlines
-
-| Deliverable | Due Date |
-|---|---|
-| Briefing Slides ([Canvas](https://canvas.mit.edu/courses/36874/assignments/449558)) | Wed, April 15th @ 1:00 PM EST |
-| Briefing (8 min + 3 min Q&A) | Wed, April 15th @ 1:00 PM EST |
-| Report ([Canvas](https://canvas.mit.edu/courses/36874/assignments/449561)) | Fri, April 24th @ 11:59 PM EST |
-| Pushed code to Git | Wed, April 15th @ 11:59 PM EST |
-| TA Checkoff | Wed, April 15th @ 1:00 PM EST |
-| [Team Member Assessment](https://forms.gle/zeuoLpq5Eg2v5W2JA) | Wed, April 15th @ 11:59 PM EST |
-
----
+| Deliverable                                                                                                             | Due Date                             |
+|-------------------------------------------------------------------------------------------------------------------------|--------------------------------------|
+| Briefing Slides (uploaded to your team's website and [Canvas](https://canvas.mit.edu/courses/36874/assignments/449558)) | Wednesday, April 15th at 1:00 PM EST |
+| Briefing (8 min presentation + 3 min Q&A)                                                                               | Wednesday, April 15th at 1:00 PM EST |
+| Report (uploaded to your team's website and [Canvas](https://canvas.mit.edu/courses/36874/assignments/449561))          | Friday, April 24th at 11:59 PM EST   |
+| Pushed code to Git                                                                                                      | Wednesday, April 15th at 11:59PM EST |
+| TA Checkoff                                                                                                             | Wednesday, April 15th at 1:00 PM EST |
+| [Team Member Assessment](https://forms.gle/zeuoLpq5Eg2v5W2JA)                                                           | Wednesday, April 15th at 11:59PM EST |
 
 # Lab 6: Path Planning
 
