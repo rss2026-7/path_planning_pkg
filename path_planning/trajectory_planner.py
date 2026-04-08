@@ -3,6 +3,7 @@ import heapq
 import math
 import numpy as np
 import rclpy
+import time
 
 from geometry_msgs.msg import PoseArray, PoseStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
@@ -153,11 +154,15 @@ class PathPlan(Node):
             self.get_logger().error("Goal position is inside an obstacle!")
             return
 
+        t0 = time.monotonic()
         path_uv = self.a_star((start_uv[0], start_uv[1], start_theta), end_uv)
+        elapsed = time.monotonic() - t0
 
         if not path_uv:
-            self.get_logger().error("A* found no path!")
+            self.get_logger().error(f"A* found no path! ({elapsed:.2f}s)")
             return
+
+        self.get_logger().info(f"A* found path with {len(path_uv)} waypoints in {elapsed:.2f}s")
 
         for u, v in path_uv:
             x, y = self.grid_to_world(u, v)
@@ -165,6 +170,7 @@ class PathPlan(Node):
 
         self.traj_pub.publish(self.trajectory.toPoseArray())
         self.trajectory.publish_viz()
+        self.get_logger().info(f"A* found path with {len(path_uv)} waypoints in {elapsed:.2f}s")
 
     def a_star(self, start_state, end_uv):
         """A* search on the dilated occupancy grid.
