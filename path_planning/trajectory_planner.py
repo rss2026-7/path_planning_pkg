@@ -19,11 +19,13 @@ class PathPlan(Node):
         super().__init__("trajectory_planner")
         self.declare_parameter('odom_topic', "default")
         self.declare_parameter('map_topic', "default")
-        self.declare_parameter('lambda', 1.0)
+        self.declare_parameter('lambda', 10.0)
+        self.declare_parameter('dilation_radius', 10)
 
         self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
         self.lambda_turn = self.get_parameter('lambda').get_parameter_value().double_value
+        self.dilation_radius = self.get_parameter('dilation_radius').get_parameter_value().integer_value
 
         self.map_sub = self.create_subscription(
             OccupancyGrid,
@@ -66,7 +68,8 @@ class PathPlan(Node):
         # 1 = occupied/unknown, 0 = free
         occupied = ((grid > 50) | (grid < 0)).astype(np.uint8)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
+        d = self.dilation_radius
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * d + 1, 2 * d + 1))
         self.occupancy_grid = cv2.dilate(occupied, kernel, iterations=1)
 
         q = msg.info.origin.orientation
