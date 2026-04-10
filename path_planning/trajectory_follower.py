@@ -39,8 +39,16 @@ class PurePursuit(Node):
                                                self.drive_topic,
                                                1)
 
+    def _stop(self):
+        """Publish a zero drive command and clear the active trajectory."""
+        stop_cmd = AckermannDriveStamped()
+        stop_cmd.drive.speed = 0.0
+        stop_cmd.drive.steering_angle = 0.0
+        self.drive_pub.publish(stop_cmd)
+
     def pose_callback(self, odometry_msg):
         if not self.initialized_traj:
+            self._stop()
             return
 
         pose = odometry_msg.pose.pose
@@ -72,6 +80,15 @@ class PurePursuit(Node):
         dists = np.linalg.norm(car_pos - closest, axis=1)
         min_seg_idx = int(np.argmin(dists))
 
+        # Check distance to end unconditionally — stop before lookahead search
+        # so the car halts even when the circle still clips the last segment
+        dist_to_end = np.linalg.norm(car_pos - pts[-1])
+        if dist_to_end <= self.lookahead:
+            self.get_logger().info("Reached end of trajectory — stopping.")
+            self.initialized_traj = False
+            self._stop()
+            return
+
         # Step 2: Find the lookahead point by searching forward from the closest segment
         # Prefer intersections farther along the path (pick t2 over t1 within a segment)
         lookahead_point = None
@@ -82,7 +99,7 @@ class PurePursuit(Node):
                 lookahead_point = pt
                 break
 
-        # If no intersection found (car is near the end or overshot), use the last point
+        # Fallback: aim at the last point if no intersection found
         if lookahead_point is None:
             lookahead_point = pts[-1]
 
