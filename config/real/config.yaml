@@ -1,3 +1,10 @@
 trajectory_planner:
   ros__parameters:
-    parameter: "fill this in :)"
+    odom_topic: "/pf/pose/odom"
+    map_topic: "/map"
+    dilation_radius: 10
+
+trajectory_follower:
+  ros__parameters:
+    odom_topic: "/pf/pose/odom"
+    drive_topic: "/vesc/high_level/input/nav_0"

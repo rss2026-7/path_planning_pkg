@@ -39,6 +39,12 @@ class PurePursuit(Node):
                                                self.drive_topic,
                                                1)
 
+        self.get_logger().info(f"PurePursuit initialized")
+        self.get_logger().info(f"  Subscribing to pose on: {self.odom_topic}")
+        self.get_logger().info(f"  Subscribing to trajectory on: /trajectory/current")
+        self.get_logger().info(f"  Publishing drive commands to: {self.drive_topic}")
+        self.get_logger().info(f"  lookahead={self.lookahead}m  speed={self.speed}m/s  wheelbase={self.wheelbase_length}m")
+
     def _stop(self):
         """Publish a zero drive command and clear the active trajectory."""
         stop_cmd = AckermannDriveStamped()
@@ -48,6 +54,8 @@ class PurePursuit(Node):
 
     def pose_callback(self, odometry_msg):
         if not self.initialized_traj:
+            self.get_logger().info("Pose received but no trajectory yet — waiting.",
+                                   throttle_duration_sec=5.0)
             self._stop()
             return
 
@@ -129,10 +137,11 @@ class PurePursuit(Node):
         drive_cmd.drive.steering_angle = steering_angle
         self.drive_pub.publish(drive_cmd)
 
-        self.get_logger().debug(
+        self.get_logger().info(
             f"car=({car_x:.2f},{car_y:.2f}) yaw={np.degrees(yaw):.1f}deg "
             f"lookahead=({lookahead_point[0]:.2f},{lookahead_point[1]:.2f}) "
-            f"steer={np.degrees(steering_angle):.1f}deg"
+            f"steer={np.degrees(steering_angle):.1f}deg",
+            throttle_duration_sec=0.5
         )
 
     def _circle_segment_intersection(self, center, radius, A, B):
