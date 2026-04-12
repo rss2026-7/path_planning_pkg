@@ -5,6 +5,7 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import PoseArray
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from visualization_msgs.msg import Marker
 from .utils import LineTrajectory
 
 
@@ -38,6 +39,8 @@ class PurePursuit(Node):
         self.drive_pub = self.create_publisher(AckermannDriveStamped,
                                                self.drive_topic,
                                                1)
+
+        self.lookahead_pub = self.create_publisher(Marker, "/followed_trajectory/lookahead_point", 1)
 
         self.get_logger().info(f"PurePursuit initialized")
         self.get_logger().info(f"  Subscribing to pose on: {self.odom_topic}")
@@ -88,52 +91,77 @@ class PurePursuit(Node):
         dists = np.linalg.norm(car_pos - closest, axis=1)
         min_seg_idx = int(np.argmin(dists))
 
-        # Check distance to end unconditionally — stop before lookahead search
-        # so the car halts even when the circle still clips the last segment
+        # Stop when within a small radius of the final goal point
         dist_to_end = np.linalg.norm(car_pos - pts[-1])
-        if dist_to_end <= self.lookahead:
+        if dist_to_end <= 0.25:
             self.get_logger().info("Reached end of trajectory — stopping.")
             self.initialized_traj = False
             self._stop()
             return
 
-        # Step 2: Find the lookahead point by searching forward from the closest segment
-        # Prefer intersections farther along the path (pick t2 over t1 within a segment)
+        # Step 2: Find the lookahead point by searching forward from the closest segment.
+        # Only accept intersections in front of the car (local_x >= 0) so segments
+        # behind the car or perpendicular hits don't produce a backward lookahead point.
         lookahead_point = None
         for i in range(min_seg_idx, len(pts) - 1):
-            pt = self._circle_segment_intersection(car_pos, self.lookahead,
-                                                   pts[i], pts[i + 1])
-            if pt is not None:
-                lookahead_point = pt
+            candidates = self._circle_segment_intersection(car_pos, self.lookahead,
+                                                           pts[i], pts[i + 1])
+            for pt in candidates:  # t2 (farther) first, then t1
+                dx_pt = pt[0] - car_x
+                dy_pt = pt[1] - car_y
+                local_x = np.cos(yaw) * dx_pt + np.sin(yaw) * dy_pt
+                if local_x >= 0:
+                    lookahead_point = pt
+                    break
+            if lookahead_point is not None:
                 break
 
-        # Fallback: aim at the last point if no intersection found
+        # Fallback: steer toward the nearest point on the path so the car naturally
+        # arcs back onto the trajectory (handles facing-away and overshoot cases).
         if lookahead_point is None:
-            lookahead_point = pts[-1]
+            lookahead_point = closest[min_seg_idx]
+
+        self._publish_lookahead_marker(lookahead_point)
 
         # Step 3: Compute pure pursuit steering angle
-        # Transform lookahead point into the car's local frame
         dx = lookahead_point[0] - car_x
         dy = lookahead_point[1] - car_y
-        L = np.hypot(dx, dy)   # actual distance to lookahead point
+        L = np.hypot(dx, dy)
 
         if L < 1e-6:
             steering_angle = 0.0
+            drive_speed = self.speed
         else:
-            # alpha = angle to lookahead point relative to car heading
-            alpha = np.arctan2(
-                np.sin(-yaw) * dx + np.cos(-yaw) * dy,   # local y
-                np.cos(-yaw) * dx - np.sin(-yaw) * dy    # local x (unused, but for clarity)
-            )
-            # Pure pursuit: steering = arctan(2 * L_wheelbase * sin(alpha) / lookahead)
-            steering_angle = np.arctan2(
-                2.0 * self.wheelbase_length * np.sin(alpha), L)
+            local_x = np.cos(yaw) * dx + np.sin(yaw) * dy
+
+            far_from_path = dists[min_seg_idx] > self.lookahead * 0.5
+
+            if local_x >= 0 or not far_from_path:
+                # Normal forward pursuit
+                alpha = np.arctan2(
+                    np.sin(-yaw) * dx + np.cos(-yaw) * dy,
+                    np.cos(-yaw) * dx - np.sin(-yaw) * dy
+                )
+                steering_angle = np.arctan2(2.0 * self.wheelbase_length * np.sin(alpha), L)
+                drive_speed = self.speed
+            else:
+                # Target is behind AND car is far from path — reverse while steering toward it.
+                # Flip effective heading (yaw + pi) so steering geometry is correct in reverse.
+                rev_yaw = yaw + np.pi
+                alpha = np.arctan2(
+                    np.sin(-rev_yaw) * dx + np.cos(-rev_yaw) * dy,
+                    np.cos(-rev_yaw) * dx - np.sin(-rev_yaw) * dy
+                )
+                steering_angle = np.arctan2(2.0 * self.wheelbase_length * np.sin(alpha), L)
+                drive_speed = -self.speed
+                self.get_logger().info("Recovery: reversing toward path.",
+                                       throttle_duration_sec=1.0)
 
         steering_angle = float(np.clip(steering_angle, -0.34, 0.34))
 
         # Publish drive command
         drive_cmd = AckermannDriveStamped()
-        drive_cmd.drive.speed = float(self.speed)
+        drive_cmd.drive.speed = float(drive_speed)
         drive_cmd.drive.steering_angle = steering_angle
         self.drive_pub.publish(drive_cmd)
 
@@ -146,9 +174,10 @@ class PurePursuit(Node):
 
     def _circle_segment_intersection(self, center, radius, A, B):
         """
-        Find the intersection of a circle (center, radius) with segment AB.
-        Returns the intersection point farthest along the segment (largest valid t),
-        or None if there is no intersection within the segment.
+        Find intersections of a circle (center, radius) with segment AB.
+        Returns a list of valid intersection points sorted by t descending
+        (farther along segment first), so callers can apply their own forward filter
+        and fall back to the closer hit if the farther one is behind the car.
 
         Algorithm based on: https://codereview.stackexchange.com/a/86428
         """
@@ -161,18 +190,39 @@ class PurePursuit(Node):
 
         discriminant = b * b - 4.0 * a * c
         if discriminant < 0:
-            return None
+            return []
 
         sqrt_disc = np.sqrt(discriminant)
         t1 = (-b - sqrt_disc) / (2.0 * a)
         t2 = (-b + sqrt_disc) / (2.0 * a)
 
-        # Prefer the farther intersection (t2) as it is "ahead" along the segment
+        pts = []
         if 0.0 <= t2 <= 1.0:
-            return A + t2 * d
+            pts.append(A + t2 * d)
         if 0.0 <= t1 <= 1.0:
-            return A + t1 * d
-        return None
+            pts.append(A + t1 * d)
+        return pts
+
+    def _publish_lookahead_marker(self, point):
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "pure_pursuit"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = float(point[0])
+        marker.pose.position.y = float(point[1])
+        marker.pose.position.z = 0.0
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.3
+        marker.scale.y = 0.3
+        marker.scale.z = 0.3
+        marker.color.r = 1.0
+        marker.color.g = 0.5
+        marker.color.b = 0.0
+        marker.color.a = 1.0
+        self.lookahead_pub.publish(marker)
 
     def trajectory_callback(self, msg):
         self.get_logger().info(f"Receiving new trajectory {len(msg.poses)} points")

@@ -1,4 +1,6 @@
 <launch>
+    <include file="$(find-pkg-share localization)/launch/map_server.launch.xml"/>
+
     <node pkg="path_planning" exec="trajectory_planner" name="trajectory_planner" output="screen">
         <param from="$(find-pkg-share path_planning)/config/real/config.yaml"/>
     </node>
@@ -9,4 +11,17 @@
         <param from="$(find-pkg-share localization)/real_params.yaml"/>
     </node>
     <node pkg="safety_controller_pkg" exec="safety_controller_pkg" name="safety_controller" output="screen"/>
+
+    <!-- Record data needed to replay the run in simulation -->
+    <executable cmd="ros2 bag record
+        -o /home/racecar/bags/run
+        /scan
+        /vesc/odom
+        /pf/pose/odom
+        /initialpose
+        /goal_pose
+        /trajectory/current
+        /tf
+        /tf_static"
+        output="screen"/>
 </launch>
