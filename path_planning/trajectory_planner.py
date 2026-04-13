@@ -21,10 +21,18 @@ class PathPlan(Node):
         self.declare_parameter('odom_topic', "default")
         self.declare_parameter('map_topic', "default")
         self.declare_parameter('dilation_radius', 10)
+        self.declare_parameter('planner', 'astar')       # 'astar' or 'rrt'
+        self.declare_parameter('rrt_max_iter', 5000)
+        self.declare_parameter('rrt_step_size', 10)      # grid pixels per step
+        self.declare_parameter('rrt_goal_bias', 0.1)     # probability [0-1] of sampling goal
 
         self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
         self.dilation_radius = self.get_parameter('dilation_radius').get_parameter_value().integer_value
+        self.planner = self.get_parameter('planner').get_parameter_value().string_value
+        self.rrt_max_iter = self.get_parameter('rrt_max_iter').get_parameter_value().integer_value
+        self.rrt_step_size = self.get_parameter('rrt_step_size').get_parameter_value().integer_value
+        self.rrt_goal_bias = self.get_parameter('rrt_goal_bias').get_parameter_value().double_value
 
         self.map_sub = self.create_subscription(
             OccupancyGrid,
@@ -149,14 +157,17 @@ class PathPlan(Node):
             return
 
         t0 = time.monotonic()
-        path_uv = self.a_star(start_uv, end_uv)
+        if self.planner == 'rrt':
+            path_uv = self.rrt(start_uv, end_uv)
+        else:
+            path_uv = self.a_star(start_uv, end_uv)
         elapsed = time.monotonic() - t0
 
         if not path_uv:
-            self.get_logger().error(f"A* found no path! ({elapsed:.2f}s)")
+            self.get_logger().error(f"{self.planner} found no path! ({elapsed:.2f}s)")
             return
 
-        self.get_logger().info(f"A* found path with {len(path_uv)} waypoints in {elapsed:.2f}s")
+        self.get_logger().info(f"{self.planner} found path with {len(path_uv)} waypoints in {elapsed:.2f}s")
 
         # Publish raw (unsmoothed) path for debugging/presentation
         for u, v in path_uv:
@@ -249,6 +260,69 @@ class PathPlan(Node):
 
         return []
 
+    def rrt(self, start_uv, end_uv):
+        """RRT on the dilated occupancy grid.
+
+        Args:
+            start_uv: (u, v) grid coords of the start
+            end_uv:   (u, v) grid coords of the goal
+        Returns:
+            List of (u, v) from start to goal, or empty list.
+        """
+        import random
+
+        tree = {start_uv: None}   # child -> parent
+        nodes = [start_uv]
+        eu, ev = end_uv
+        step = self.rrt_step_size
+
+        for _ in range(self.rrt_max_iter):
+            # Goal-biased random sampling
+            if random.random() < self.rrt_goal_bias:
+                q_rand = end_uv
+            else:
+                q_rand = (
+                    random.randint(0, self.map_info.width  - 1),
+                    random.randint(0, self.map_info.height - 1),
+                )
+
+            # Nearest node in tree (squared distance is fine for comparison)
+            q_near = min(nodes, key=lambda n: (n[0]-q_rand[0])**2 + (n[1]-q_rand[1])**2)
+
+            # Steer toward q_rand by at most `step` pixels
+            du = q_rand[0] - q_near[0]
+            dv = q_rand[1] - q_near[1]
+            dist = math.sqrt(du*du + dv*dv)
+            if dist == 0:
+                continue
+            if dist > step:
+                du = int(round(du / dist * step))
+                dv = int(round(dv / dist * step))
+            q_new = (q_near[0] + du, q_near[1] + dv)
+
+            if not self.is_free(*q_new):
+                continue
+            if not self.line_of_sight(*q_near, *q_new):
+                continue
+
+            tree[q_new] = q_near
+            nodes.append(q_new)
+
+            # Check if we can reach the goal from q_new
+            dg = math.sqrt((eu - q_new[0])**2 + (ev - q_new[1])**2)
+            if dg <= step and self.line_of_sight(*q_new, eu, ev):
+                tree[end_uv] = q_new
+                break
+        else:
+            return []   # max iterations reached without connecting
+
+        # Reconstruct path from goal back to start
+        path = []
+        node = end_uv
+        while node is not None:
+            path.append(node)
+            node = tree[node]
+        return list(reversed(path))
 
 
 def main(args=None):

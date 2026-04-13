@@ -3,6 +3,7 @@ trajectory_planner:
     odom_topic: "/pf/pose/odom"
     map_topic: "/map"
     dilation_radius: 10
+    planner: "astar"
 
 trajectory_follower:
   ros__parameters:

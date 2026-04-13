@@ -3,6 +3,7 @@ trajectory_planner:
     odom_topic: "/odom"
     map_topic: "/map"
     scan_topic: "/scan"
+    planner: "astar"
 trajectory_follower:
   ros__parameters:
     odom_topic: "/odom"
