@@ -21,9 +21,9 @@ class PurePursuit(Node):
         self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.drive_topic = self.get_parameter('drive_topic').get_parameter_value().string_value
 
-        self.lookahead = 1.5        # meters; tune based on speed and path curvature
+        self.lookahead = .75        # meters; tune based on speed and path curvature
         self.speed = 1.0            # m/s
-        self.wheelbase_length = 0.325  # meters; MIT RACECAR wheelbase
+        self.wheelbase_length = 0.21  # meters; MIT RACECAR wheelbase
 
         self.initialized_traj = False
         self.trajectory = LineTrajectory(self, "/followed_trajectory")

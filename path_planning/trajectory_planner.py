@@ -21,6 +21,8 @@ class PathPlan(Node):
         self.declare_parameter('odom_topic', "default")
         self.declare_parameter('map_topic', "default")
         self.declare_parameter('dilation_radius', 10)
+        self.declare_parameter('wall_weight', 3.0)
+        self.declare_parameter('wall_thresh', 40.0)
         self.declare_parameter('planner', 'astar')       # 'astar' or 'rrt'
         self.declare_parameter('rrt_max_iter', 5000)
         self.declare_parameter('rrt_step_size', 10)      # grid pixels per step
@@ -29,6 +31,8 @@ class PathPlan(Node):
         self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
         self.dilation_radius = self.get_parameter('dilation_radius').get_parameter_value().integer_value
+        self.wall_weight = self.get_parameter('wall_weight').get_parameter_value().double_value
+        self.wall_thresh = self.get_parameter('wall_thresh').get_parameter_value().double_value
         self.planner = self.get_parameter('planner').get_parameter_value().string_value
         self.rrt_max_iter = self.get_parameter('rrt_max_iter').get_parameter_value().integer_value
         self.rrt_step_size = self.get_parameter('rrt_step_size').get_parameter_value().integer_value
@@ -65,6 +69,7 @@ class PathPlan(Node):
 
         self.map_info = None
         self.occupancy_grid = None
+        self.dist_to_wall = None
         self.current_pose = None
 
     def map_cb(self, msg):
@@ -75,6 +80,11 @@ class PathPlan(Node):
 
         # 1 = occupied/unknown, 0 = free
         occupied = ((grid > 50) | (grid < 0)).astype(np.uint8)
+
+        # Distance (pixels) from each free cell to the nearest physical wall, pre-dilation.
+        # Used by the A* heuristic to prefer paths through open space.
+        free = (1 - occupied).astype(np.uint8)
+        self.dist_to_wall = cv2.distanceTransform(free, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
 
         d = self.dilation_radius
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * d + 1, 2 * d + 1))
@@ -224,7 +234,9 @@ class PathPlan(Node):
 
         def heuristic(u, v):
             du, dv = abs(eu - u), abs(ev - v)
-            return max(du, dv) + (math.sqrt(2) - 1) * min(du, dv)
+            octile = max(du, dv) + (math.sqrt(2) - 1) * min(du, dv)
+            wall_penalty = self.wall_weight * max(0.0, self.wall_thresh - self.dist_to_wall[v, u])
+            return octile + wall_penalty
 
         # heap entries: (f, g, u, v)
         open_heap = [(heuristic(su, sv), 0.0, su, sv)]
