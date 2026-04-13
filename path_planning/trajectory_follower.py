@@ -1,10 +1,15 @@
+import csv
+import os
+import time
+
 import rclpy
 import numpy as np
 
 from ackermann_msgs.msg import AckermannDriveStamped
-from geometry_msgs.msg import PoseArray
+from geometry_msgs.msg import Point, PoseArray
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker
 from .utils import LineTrajectory
 
@@ -41,6 +46,24 @@ class PurePursuit(Node):
                                                1)
 
         self.lookahead_pub = self.create_publisher(Marker, "/followed_trajectory/lookahead_point", 1)
+
+        # --- Ground truth & PF pose subscriptions (for logging / visualization) ---
+        self.gt_pose = None
+        self.pf_pose = None
+
+        self.gt_sub = self.create_subscription(Odometry, "/odom", self.gt_pose_callback, 1)
+        self.pf_sub = self.create_subscription(Odometry, "/pf/pose/odom", self.pf_pose_callback, 1)
+
+        # Trail markers
+        self.gt_trail_pub = self.create_publisher(Marker, "/trajectory_follower/gt_trail", 1)
+        self.pf_trail_pub = self.create_publisher(Marker, "/trajectory_follower/pf_trail", 1)
+        self.gt_trail_points = []
+        self.pf_trail_points = []
+
+        # CSV buffers: list of (timestamp, x, y, cross_track_error)
+        self.cte_gt_buffer = []
+        self.cte_pf_buffer = []
+        self.csv_dir = os.getcwd()
 
         self.get_logger().info(f"PurePursuit initialized")
         self.get_logger().info(f"  Subscribing to pose on: {self.odom_topic}")
@@ -224,8 +247,126 @@ class PurePursuit(Node):
         marker.color.a = 1.0
         self.lookahead_pub.publish(marker)
 
+    # --- Ground truth / PF pose callbacks (logging & trail visualization) ---
+
+    def gt_pose_callback(self, msg):
+        pos = msg.pose.pose.position
+        self.gt_pose = np.array([pos.x, pos.y])
+
+        if not self.initialized_traj:
+            return
+
+        # Trail
+        self.gt_trail_points.append((pos.x, pos.y))
+        self._publish_trail(self.gt_trail_pub, self.gt_trail_points,
+                            r=0.0, g=1.0, b=0.0, marker_id=0)
+
+        # CTE
+        cte = self._compute_cross_track_error(self.gt_pose)
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.cte_gt_buffer.append((t, pos.x, pos.y, cte))
+
+    def pf_pose_callback(self, msg):
+        pos = msg.pose.pose.position
+        self.pf_pose = np.array([pos.x, pos.y])
+
+        if not self.initialized_traj:
+            return
+
+        # Trail
+        self.pf_trail_points.append((pos.x, pos.y))
+        self._publish_trail(self.pf_trail_pub, self.pf_trail_points,
+                            r=1.0, g=0.0, b=0.0, marker_id=1)
+
+        # CTE
+        cte = self._compute_cross_track_error(self.pf_pose)
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.cte_pf_buffer.append((t, pos.x, pos.y, cte))
+
+    def _compute_cross_track_error(self, position):
+        """Minimum perpendicular distance from position to the planned trajectory."""
+        pts = np.array(self.trajectory.points)
+        if len(pts) < 2:
+            return 0.0
+
+        A = pts[:-1]
+        B = pts[1:]
+        AB = B - A
+        AP = position - A
+
+        AB_sq = np.sum(AB * AB, axis=1)
+        AB_sq = np.where(AB_sq < 1e-10, 1e-10, AB_sq)
+        t = np.clip(np.sum(AP * AB, axis=1) / AB_sq, 0.0, 1.0)
+
+        closest = A + t[:, np.newaxis] * AB
+        dists = np.linalg.norm(position - closest, axis=1)
+        return float(np.min(dists))
+
+    def _publish_trail(self, publisher, points, r, g, b, marker_id):
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "trajectory_trail"
+        marker.id = marker_id
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.scale.x = 0.05  # line width
+        marker.color = ColorRGBA(r=r, g=g, b=b, a=1.0)
+        marker.pose.orientation.w = 1.0
+
+        for (px, py) in points:
+            p = Point()
+            p.x = float(px)
+            p.y = float(py)
+            p.z = 0.0
+            marker.points.append(p)
+
+        publisher.publish(marker)
+
+    def _flush_csv(self):
+        """Write current CTE buffers to CSV files."""
+        timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+
+        if self.cte_gt_buffer:
+            path = os.path.join(self.csv_dir, f"cte_ground_truth_{timestamp_str}.csv")
+            with open(path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["timestamp", "x", "y", "cross_track_error"])
+                writer.writerows(self.cte_gt_buffer)
+            self.get_logger().info(f"Wrote GT CTE CSV: {path}")
+
+        if self.cte_pf_buffer:
+            path = os.path.join(self.csv_dir, f"cte_particle_filter_{timestamp_str}.csv")
+            with open(path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["timestamp", "x", "y", "cross_track_error"])
+                writer.writerows(self.cte_pf_buffer)
+            self.get_logger().info(f"Wrote PF CTE CSV: {path}")
+
+    def _clear_trail_marker(self, publisher, marker_id):
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "trajectory_trail"
+        marker.id = marker_id
+        marker.action = Marker.DELETE
+        publisher.publish(marker)
+
     def trajectory_callback(self, msg):
         self.get_logger().info(f"Receiving new trajectory {len(msg.poses)} points")
+
+        # Flush previous run's CTE data to CSV before resetting
+        self._flush_csv()
+
+        # Reset trail markers in RViz
+        self._clear_trail_marker(self.gt_trail_pub, 0)
+        self._clear_trail_marker(self.pf_trail_pub, 1)
+        self.gt_trail_points = []
+        self.pf_trail_points = []
+
+        # Reset CTE buffers
+        self.cte_gt_buffer = []
+        self.cte_pf_buffer = []
 
         self.trajectory.clear()
         self.trajectory.fromPoseArray(msg)
@@ -237,5 +378,11 @@ class PurePursuit(Node):
 def main(args=None):
     rclpy.init(args=args)
     follower = PurePursuit()
-    rclpy.spin(follower)
+    try:
+        rclpy.spin(follower)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        follower._flush_csv()
+        follower.destroy_node()
     rclpy.shutdown()
