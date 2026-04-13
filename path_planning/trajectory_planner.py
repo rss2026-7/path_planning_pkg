@@ -52,7 +52,8 @@ class PathPlan(Node):
             10
         )
 
-        self.trajectory = LineTrajectory(node=self, viz_namespace="/planned_trajectory")
+        self.trajectory = LineTrajectory(node=self, viz_namespace="/planned_trajectory", color=(0.0, 0.5, 1.0))
+        self.raw_trajectory = LineTrajectory(node=self, viz_namespace="/planned_trajectory_raw", color=(1.0, 1.0, 1.0))
 
         self.map_info = None
         self.occupancy_grid = None
@@ -135,6 +136,7 @@ class PathPlan(Node):
 
     def plan_path(self, start_point, end_point, occupancy_grid):
         self.trajectory.clear()
+        self.raw_trajectory.clear()
 
         start_uv = self.world_to_grid(start_point[0], start_point[1])
         end_uv = self.world_to_grid(end_point[0], end_point[1])
@@ -155,6 +157,12 @@ class PathPlan(Node):
             return
 
         self.get_logger().info(f"A* found path with {len(path_uv)} waypoints in {elapsed:.2f}s")
+
+        # Publish raw (unsmoothed) path for debugging/presentation
+        for u, v in path_uv:
+            x, y = self.grid_to_world(u, v)
+            self.raw_trajectory.addPoint((x, y))
+        self.raw_trajectory.publish_viz()
 
         path_uv = self.smooth_path(path_uv)
         self.get_logger().info(f"After smoothing: {len(path_uv)} waypoints")

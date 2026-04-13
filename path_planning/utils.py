@@ -17,13 +17,15 @@ EPSILON = 0.00000000001
 class LineTrajectory:
     """ A class to wrap and work with piecewise linear trajectories. """
 
-    def __init__(self, node, viz_namespace=None):
+    def __init__(self, node, viz_namespace=None, color=None):
         self.points: List[Tuple[float, float]] = []
         self.distances = []
         self.has_acceleration = False
         self.visualize = False
         self.viz_namespace = viz_namespace
         self.node = node
+        # color: (r, g, b) floats in [0, 1]; defaults to white
+        self.color = color if color is not None else (1.0, 1.0, 1.0)
 
         if viz_namespace:
             self.visualize = True
@@ -202,9 +204,9 @@ class LineTrajectory:
             if should_publish:
                 marker.action = marker.ADD
                 marker.scale.x = 0.3
-                marker.color.r = 1.0
-                marker.color.g = 1.0
-                marker.color.b = 1.0
+                marker.color.r = self.color[0]
+                marker.color.g = self.color[1]
+                marker.color.b = self.color[2]
                 marker.color.a = 1.0
                 for p in self.points:
                     pt = Point()
