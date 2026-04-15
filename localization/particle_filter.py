@@ -174,9 +174,9 @@ class ParticleFilter(Node):
         self.particles = self.particles[sampled_indices]
 
         # Add a tiny bit of noise after resampling to keep the set diverse
-        self.particles[:, 0] += np.random.normal(0, 0.05, self.num_particles)
-        self.particles[:, 1] += np.random.normal(0, 0.05, self.num_particles)
-        self.particles[:, 2] += np.random.normal(0, 0.02, self.num_particles)
+        self.particles[:, 0] 
+        self.particles[:, 1] 
+        self.particles[:, 2] 
 
         self.publish_pose_estimate()
 

@@ -6,7 +6,7 @@ class MotionModel:
         self.node = node
 
         # Motion noise parameters
-        self.sigma_x = 0.1
+        self.sigma_x = 0.2
         self.sigma_y = 0.05
         self.sigma_theta = 0.05
 
