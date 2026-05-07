@@ -59,7 +59,6 @@ class PurePursuit(Node):
         if not self.initialized_traj:
             self.get_logger().info("Pose received but no trajectory yet — waiting.",
                                    throttle_duration_sec=5.0)
-            self._stop()
             return
 
         pose = odometry_msg.pose.pose

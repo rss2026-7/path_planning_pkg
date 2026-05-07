@@ -1,0 +1,25 @@
+<launch>
+	<node pkg="path_planning" exec="trajectory_planner" name="trajectory_planner" output="screen">
+		<param from="$(find-pkg-share path_planning)/config/real/config.yaml"/>
+	</node>
+    <node pkg="path_planning" exec="trajectory_follower" name="trajectory_follower" output="screen">
+        <param from="$(find-pkg-share path_planning)/config/real/config.yaml"/>
+    </node>
+    <node pkg="localization" exec="particle_filter" name="particle_filter" output="screen">
+        <param from="$(find-pkg-share localization)/real_params.yaml"/>
+    </node>
+    
+
+    <!-- Record data needed to replay the run in simulation -->
+    <executable cmd="ros2 bag record
+        -o /home/racecar/bags/run
+        /scan
+        /vesc/odom
+        /pf/pose/odom
+        /initialpose
+        /goal_pose
+        /trajectory/current
+        /tf
+        /tf_static"
+        output="screen"/>
+</launch>
