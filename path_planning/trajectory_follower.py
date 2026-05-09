@@ -21,9 +21,15 @@ class PurePursuit(Node):
         self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.drive_topic = self.get_parameter('drive_topic').get_parameter_value().string_value
 
-        self.lookahead = 1.5       # meters; tune based on speed and path curvature
+        self.lookahead = 2       # meters; tune based on speed and path curvature
         self.speed = 1.0            # m/s
         self.wheelbase_length = 0.325  # meters; MIT RACECAR wheelbase
+
+        # Low-pass on steering. PF yaw jitters at ~20 Hz on the real car and
+        # was feeding straight through to the wheel, producing visible wobble
+        # on straight segments. alpha is the weight on the NEW reading.
+        self.steer_alpha = 0.3
+        self.prev_steer = 0.0
 
         self.initialized_traj = False
         self.trajectory = LineTrajectory(self, "/followed_trajectory")
@@ -176,7 +182,9 @@ class PurePursuit(Node):
                 self.get_logger().info("Recovery: reversing toward path.",
                                        throttle_duration_sec=1.0)
 
+        steering_angle = self.steer_alpha * steering_angle + (1.0 - self.steer_alpha) * self.prev_steer
         steering_angle = float(np.clip(steering_angle, -0.34, 0.34))
+        self.prev_steer = steering_angle
 
         # Publish drive command
         drive_cmd = AckermannDriveStamped()
@@ -259,6 +267,7 @@ class PurePursuit(Node):
             self._stop()
             return
 
+        self.prev_steer = 0.0
         self.initialized_traj = True
 
 
