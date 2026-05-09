@@ -21,7 +21,7 @@ class PurePursuit(Node):
         self.odom_topic = self.get_parameter('odom_topic').get_parameter_value().string_value
         self.drive_topic = self.get_parameter('drive_topic').get_parameter_value().string_value
 
-        self.lookahead = 1.5        # meters; tune based on speed and path curvature
+        self.lookahead = 1.5       # meters; tune based on speed and path curvature
         self.speed = 1.0            # m/s
         self.wheelbase_length = 0.325  # meters; MIT RACECAR wheelbase
 
@@ -90,9 +90,15 @@ class PurePursuit(Node):
         dists = np.linalg.norm(car_pos - closest, axis=1)
         min_seg_idx = int(np.argmin(dists))
 
-        # Stop when within a small radius of the final goal point
+        # Stop when within a small radius of the final goal point. Threshold
+        # is set slightly above state_machine's arrival_threshold (0.75 m) so
+        # pure pursuit silences itself BEFORE state_machine transitions to
+        # ARRIVED. Without this, pose_callback keeps firing forward+steer
+        # commands during the 0.75→0.25 m window, racing state_machine's
+        # zeros on /vesc/high_level/input/nav_0 and producing a swerve at
+        # the goal.
         dist_to_end = np.linalg.norm(car_pos - pts[-1])
-        if dist_to_end <= 0.25:
+        if dist_to_end <= 0.8:
             self.get_logger().info("Reached end of trajectory — stopping.")
             self.initialized_traj = False
             self._stop()
@@ -115,10 +121,24 @@ class PurePursuit(Node):
             if lookahead_point is not None:
                 break
 
-        # Fallback: steer toward the nearest point on the path so the car naturally
-        # arcs back onto the trajectory (handles facing-away and overshoot cases).
+        # Fallback: no lookahead-circle intersection found ahead of the car.
+        # Two distinct cases produce this:
+        #   1. Car is far off the path (closest segment > lookahead away) —
+        #      the circle never touches any segment.
+        #   2. Car is near the end of the path — the remaining path is
+        #      shorter than `lookahead`, so the circle overshoots pts[-1]
+        #      and the last segment(s) sit fully inside the circle (no
+        #      boundary crossing → no intersection returned).
+        # In (1) we arc back to the perpendicular foot. In (2) we MUST aim
+        # at pts[-1]: the perpendicular foot near the end can be sideways
+        # or BEHIND the car if it has drifted past, and forward pure
+        # pursuit toward a behind-target saturates steering at ±max and
+        # produces the swerve-at-the-goal the TA flagged.
         if lookahead_point is None:
-            lookahead_point = closest[min_seg_idx]
+            if dists[min_seg_idx] > self.lookahead:
+                lookahead_point = closest[min_seg_idx]
+            else:
+                lookahead_point = pts[-1]
 
         self._publish_lookahead_marker(lookahead_point)
 
@@ -229,6 +249,15 @@ class PurePursuit(Node):
         self.trajectory.clear()
         self.trajectory.fromPoseArray(msg)
         self.trajectory.publish_viz(duration=0.0)
+
+        # Empty / sub-2-point trajectory means "stop following." Emit an
+        # explicit zero drive command so the last value on the drive topic is
+        # a stop — otherwise VESC holds the previous pose_callback's steering
+        # angle until the next publisher takes over.
+        if len(msg.poses) < 2:
+            self.initialized_traj = False
+            self._stop()
+            return
 
         self.initialized_traj = True
 
